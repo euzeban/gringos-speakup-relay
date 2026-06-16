@@ -94,9 +94,11 @@ wss.on("connection", (client, req) => {
     }
 
     if (msg.type === "audio" && session) {
-      // chunk PCM base64 do microfone -> Gemini
+      // chunk PCM base64 do microfone -> Gemini.
+      // Campo "audio" (NÃO "media"): o gemini-3.1-flash-live recusa media_chunks (deprecado,
+      // close 1007). "audio" é o realtime audio input stream do SDK.
       try {
-        session.sendRealtimeInput({ media: { data: msg.data, mimeType: msg.mimeType || "audio/pcm;rate=16000" } });
+        session.sendRealtimeInput({ audio: { data: msg.data, mimeType: msg.mimeType || "audio/pcm;rate=16000" } });
       } catch {}
       return;
     }
