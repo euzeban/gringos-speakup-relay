@@ -1,0 +1,18 @@
+{
+  "name": "gringos-speakup-relay",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "WebSocket relay seguro entre o navegador e o Gemini Live (gemini-3.1-flash-live-preview) para o SpeakUp da Gringos Academy. A chave Gemini fica só no servidor.",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@google/genai": "^1.46.0",
+    "ws": "^8.18.0"
+  }
+}
