@@ -14,6 +14,18 @@ const MODEL = process.env.LIVE_MODEL || "gemini-3.1-flash-live-preview";
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
   .split(",").map((s) => s.trim()).filter(Boolean);
 
+// Detecção de fala (VAD). Sem isto o Gemini usa o padrão dele, que é sensível demais para
+// aluno em casa: tosse, teclado, TV ou a própria voz da Aisling saindo pela caixa de som
+// cortam a fala dela no meio. Relatado pelo Mauro em 23/09.
+//   START baixo   = precisa de fala mais clara para o aluno tomar o turno
+//   prefixPadding = quanto de som sustentado antes de valer como começo de fala
+//   silenceDuration = quanto de silêncio antes de considerar que o aluno terminou
+// Tudo por env, para calibrar sem tocar em código: uma conversa real vale mais que meu chute.
+const VAD_START = process.env.VAD_START_SENSITIVITY || "START_SENSITIVITY_LOW";
+const VAD_END = process.env.VAD_END_SENSITIVITY || "END_SENSITIVITY_HIGH";
+const VAD_PREFIX_MS = Number(process.env.VAD_PREFIX_PADDING_MS || 300);
+const VAD_SILENCE_MS = Number(process.env.VAD_SILENCE_MS || 700);
+
 if (!GEMINI_API_KEY || !RELAY_SECRET) {
   console.error("[relay] faltando GEMINI_API_KEY ou SPEAKUP_RELAY_SECRET no ambiente.");
   process.exit(1);
@@ -74,7 +86,18 @@ wss.on("connection", (client, req) => {
         systemInstruction: typeof msg.systemInstruction === "string" ? msg.systemInstruction : "",
         outputAudioTranscription: {},
         inputAudioTranscription: {},
+        realtimeInputConfig: {
+          automaticActivityDetection: {
+            startOfSpeechSensitivity: VAD_START,
+            endOfSpeechSensitivity: VAD_END,
+            prefixPaddingMs: VAD_PREFIX_MS,
+            silenceDurationMs: VAD_SILENCE_MS,
+          },
+        },
       };
+      console.log(
+        `[relay] VAD: start=${VAD_START} end=${VAD_END} prefix=${VAD_PREFIX_MS}ms silence=${VAD_SILENCE_MS}ms`,
+      );
       try {
         session = await ai.live.connect({
           model: MODEL,
