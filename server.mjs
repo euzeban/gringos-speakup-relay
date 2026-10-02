@@ -19,7 +19,10 @@ if (!GEMINI_API_KEY || !RELAY_SECRET) {
   process.exit(1);
 }
 
-// Token curto: base64url(payloadJSON).base64url(hmacSHA256). payload = { uid, exp }
+// Token curto: base64url(payloadJSON).base64url(hmacSHA256). payload = { uid, exp, fim?, jti? }
+//   exp = prazo para CONECTAR (2 min). fim = prazo da CONVERSA (epoch ms), decidido pelo app pelo
+//   plano do aluno; reconexao da mesma conversa recebe o mesmo fim. jti = id unico do token.
+//   Token antigo sem fim/jti continua aceito (o app sobe antes do relay).
 function verifyToken(token) {
   try {
     if (!token || typeof token !== "string" || !token.includes(".")) return null;
@@ -33,6 +36,24 @@ function verifyToken(token) {
     return payload;
   } catch { return null; }
 }
+
+// Token de uso unico: o mesmo jti nao abre duas conversas. Guardado ate o exp dele vencer.
+const jtiUsados = new Map();
+function marcarJti(payload) {
+  if (!payload.jti) return true;
+  const jti = String(payload.jti);
+  if (jtiUsados.has(jti)) return false;
+  jtiUsados.set(jti, Number(payload.exp) || Date.now() + 120_000);
+  return true;
+}
+setInterval(() => {
+  const agora = Date.now();
+  for (const [jti, exp] of jtiUsados) if (exp < agora) jtiUsados.delete(jti);
+}, 60_000).unref();
+
+// Teto absoluto de seguranca para token sem fim (cliente antigo): 15 min, igual ao teto de
+// sanidade do /api/speakup/session/end.
+const DURACAO_MAX_SEM_FIM_MS = 15 * 60_000;
 
 function safeSend(ws, obj) {
   try { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj)); } catch {}
@@ -57,6 +78,15 @@ wss.on("connection", (client, req) => {
   try { token = new URL(req.url, "http://x").searchParams.get("token") || ""; } catch {}
   const payload = verifyToken(token);
   if (!payload) { client.close(1008, "auth"); return; }
+  if (!marcarJti(payload)) { client.close(1008, "token reusado"); return; }
+
+  // Prazo da conversa no servidor: o navegador encerra antes pelo timer dele; isto aqui so
+  // segura quem nao encerra (aba esquecida, cliente alterado). 4000 = fim do tempo do plano.
+  const fim = Number(payload.fim) || Date.now() + DURACAO_MAX_SEM_FIM_MS;
+  const prazo = setTimeout(() => {
+    safeSend(client, { type: "limite", reason: "tempo" });
+    try { client.close(4000, "tempo"); } catch {}
+  }, Math.max(0, Math.min(fim, Date.now() + DURACAO_MAX_SEM_FIM_MS) - Date.now()));
 
   const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY, httpOptions: { apiVersion: "v1beta" } });
   let session = null;
@@ -104,7 +134,7 @@ wss.on("connection", (client, req) => {
     }
   });
 
-  const teardown = () => { try { session?.close?.(); } catch {} session = null; };
+  const teardown = () => { clearTimeout(prazo); try { session?.close?.(); } catch {} session = null; };
   client.on("close", teardown);
   client.on("error", teardown);
 });
