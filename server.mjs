@@ -51,6 +51,11 @@ setInterval(() => {
   for (const [jti, exp] of jtiUsados) if (exp < agora) jtiUsados.delete(jti);
 }, 60_000).unref();
 
+// Uma conversa ao vivo por aluno (QA 02/10, M4): conexao nova do mesmo uid derruba a anterior
+// com 4001. Reconexao legitima ja chega depois da antiga cair; duas abas ou um cliente que
+// repete o token da mesma conversa nao pagam varias sessoes Gemini por uma simulacao.
+const conexaoDoAluno = new Map();
+
 // Teto absoluto de seguranca para token sem fim (cliente antigo): 15 min, igual ao teto de
 // sanidade do /api/speakup/session/end.
 const DURACAO_MAX_SEM_FIM_MS = 15 * 60_000;
@@ -79,6 +84,14 @@ wss.on("connection", (client, req) => {
   const payload = verifyToken(token);
   if (!payload) { client.close(1008, "auth"); return; }
   if (!marcarJti(payload)) { client.close(1008, "token reusado"); return; }
+
+  const uid = String(payload.uid || "");
+  const anterior = uid ? conexaoDoAluno.get(uid) : null;
+  if (anterior && anterior !== client) {
+    safeSend(anterior, { type: "limite", reason: "outra_tela" });
+    try { anterior.close(4001, "outra tela"); } catch {}
+  }
+  if (uid) conexaoDoAluno.set(uid, client);
 
   // Prazo da conversa no servidor: o navegador encerra antes pelo timer dele; isto aqui so
   // segura quem nao encerra (aba esquecida, cliente alterado). 4000 = fim do tempo do plano.
@@ -134,7 +147,12 @@ wss.on("connection", (client, req) => {
     }
   });
 
-  const teardown = () => { clearTimeout(prazo); try { session?.close?.(); } catch {} session = null; };
+  const teardown = () => {
+    clearTimeout(prazo);
+    if (uid && conexaoDoAluno.get(uid) === client) conexaoDoAluno.delete(uid);
+    try { session?.close?.(); } catch {}
+    session = null;
+  };
   client.on("close", teardown);
   client.on("error", teardown);
 });
